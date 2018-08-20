@@ -307,11 +307,43 @@ class PartialCards extends EventsMixin(NavigateMixin(PolymerElement)) {
     Will make sure we always show entities from ALWAYS_SHOW_DOMAINS domains.
   */
   computeViewStates(currentView, hass, defaultView) {
+    var i, j;
+    var entityId;
+    var state;
+    var mystates;
+    var views;
+    var view;
     const entityIds = Object.keys(hass.states);
 
     // If we base off all entities, only have to filter out hidden
+    views = window.HAWS.extractViews(hass.states);
     if (!this.isView(currentView, defaultView)) {
-      return this._computeDefaultViewStates(hass, entityIds);
+      mystates = {};
+      for (i = 0; i < entityIds.length; i++) {
+        entityId = entityIds[i];
+        state = hass.states[entityId];
+
+        // We can filter out hidden and domain at the same time.
+        if (!state.attributes.hidden) {
+          mystates[entityId] = state;
+        }
+      }
+
+      for (i = 0; i < views.length; i++) {
+        view = views[i];
+        if (view.attributes.hide_on_home) {
+          var entities = view.attributes.entity_id.slice();
+          while (entities.length) {
+            entityId = entities.shift()
+            delete mystates[entityId]
+            if (window.HAWS.extractDomain(entityId) == 'group') {
+              entities = entities.concat(hass.states[entityId].attributes.entity_id)
+            }
+          }
+        }
+      }
+
+      return mystates;
     }
 
     let states;
