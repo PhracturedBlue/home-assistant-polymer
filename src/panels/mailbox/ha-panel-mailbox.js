@@ -7,6 +7,8 @@ import '@polymer/paper-dialog/paper-dialog.js';
 import '@polymer/paper-input/paper-textarea.js';
 import '@polymer/paper-item/paper-item-body.js';
 import '@polymer/paper-item/paper-item.js';
+import '@polymer/paper-tabs/paper-tab.js';
+import '@polymer/paper-tabs/paper-tabs.js';
 import { html } from '@polymer/polymer/lib/utils/html-tag.js';
 import { PolymerElement } from '@polymer/polymer/polymer-element.js';
 
@@ -104,15 +106,30 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
           <ha-menu-button narrow='[[narrow]]' show-menu='[[showMenu]]'></ha-menu-button>
           <div main-title>[[localize('panel.mailbox')]]</div>
         </app-toolbar>
+        <div sticky hidden$='[[areTabsHidden(platforms)]]'>
+          <paper-tabs
+            scrollable
+            selected='[[currentMailbox]]'
+            attr-for-selected='data-entity'
+            on-iron-activate='handlePlatformSelected'
+          >
+            <template is='dom-repeat' items='[[platforms]]'>
+              <paper-tab
+                data-entity='[[item]]'
+              >
+                [[getPlatformName(item)]]
+              </paper-tab>
+            </template>
+          </paper-tabs>
       </app-header>
       <div class='content'>
         <paper-card>
-          <template is='dom-if' if='[[!_messages.length]]'>
+          <template is='dom-if' if='[[!_platformMessages.length]]'>
             <div class='card-content empty'>
               [[localize('ui.panel.mailbox.empty')]]
             </div>
           </template>
-          <template is='dom-repeat' items='[[_messages]]'>
+          <template is='dom-repeat' items='[[_platformMessages]]'>
             <paper-item on-click='openMP3Dialog'>
               <paper-item-body style="width:100%" two-line>
                 <div class="row">
@@ -133,12 +150,13 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
       <h2>
         [[localize('ui.panel.mailbox.playback_title')]]
         <paper-icon-button
+          id="delete"
           on-click='openDeleteDialog'
           icon='hass:delete'
         ></paper-icon-button>
       </h2>
-      <div id="transcribe"></div>
-      <div>
+      <div id="transcribe">text</div>
+      <div id="stream">
         <audio id="mp3" preload="none" controls> <source id="mp3src" src="" type="audio/mpeg" /></audio>
       </div>
     </paper-dialog>
@@ -176,11 +194,25 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
       _messages: {
         type: Array,
       },
+      _platformMessages: {
+        type: Array,
+      },
 
+      currentPlatform: {
+        type: Number,
+        value: 0
+      },
+      mailboxes: {
+        type: Array,
+      },
       currentMessage: {
         type: Object,
       },
     };
+  }
+
+  areTabsHidden(platforms) {
+    return !platforms || platforms.length < 2
   }
 
   connectedCallback() {
@@ -205,6 +237,10 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
     }
     this.getMessages().then(function (items) {
       this._messages = items;
+      if (this._messages.length <= this.currentPlatform) {
+        this.currentPlatform = 0;
+      }
+      this._platformMessages = this._messages[this.currentPlatform];
     }.bind(this));
   }
 
@@ -212,10 +248,20 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
     var platform = event.model.item.platform;
     this.currentMessage = event.model.item;
     this.$.mp3dialog.open();
-    this.$.mp3src.src = '/api/mailbox/media/' + platform + '/' + event.model.item.sha;
     this.$.transcribe.innerText = event.model.item.message;
-    this.$.mp3.load();
-    this.$.mp3.play();
+    if (platform.can_delete) {
+        this.$.delete.style.display = 'initial'
+    } else {
+        this.$.delete.style.display = 'none'
+    }
+    if (platform.has_media) {
+        this.$.mp3.style.display = 'initial'
+        this.$.mp3src.src = '/api/mailbox/media/' + platform.name + '/' + event.model.item.sha;
+        this.$.mp3.load();
+        this.$.mp3.play();
+    } else {
+        this.$.mp3.style.display = 'none'
+    }
   }
 
   _mp3Closed() {
@@ -228,12 +274,12 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
 
   deleteSelected() {
     var msg = this.currentMessage;
-    this.hass.callApi('DELETE', 'mailbox/delete/' + msg.platform + '/' + msg.sha);
+    this.hass.callApi('DELETE', 'mailbox/delete/' + msg.platform.name + '/' + msg.sha);
     this.$.mp3dialog.close();
   }
   getMessages() {
     const items = this.platforms.map(function (platform) {
-      return this.hass.callApi('GET', 'mailbox/messages/' + platform).then(function (values) {
+      return this.hass.callApi('GET', 'mailbox/messages/' + platform.name).then(function (values) {
         var platformItems = [];
         var arrayLength = values.length;
         for (var i = 0; i < arrayLength; i++) {
@@ -254,11 +300,11 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
       var arrayLength = items.length;
       var final = [];
       for (var i = 0; i < arrayLength; i++) {
-        final = final.concat(platformItems[i]);
+        final[i] = platformItems[i]
+        final[i].sort(function (a, b) {
+          return new Date(b.timestamp) - new Date(a.timestamp);
+        });
       }
-      final.sort(function (a, b) {
-        return new Date(b.timestamp) - new Date(a.timestamp);
-      });
       return final;
     });
   }
@@ -266,6 +312,22 @@ class HaPanelMailbox extends LocalizeMixin(PolymerElement) {
   computePlatforms() {
     return this.hass.callApi('GET', 'mailbox/platforms');
   }
+
+  handlePlatformSelected(ev) {
+    var newPlatform = ev.detail.selected
+    var idx = this.platforms.indexOf(newPlatform)
+    if (idx != this.currentPlatform) {
+        this.currentPlatform = idx
+        this._platformMessages = this._messages[idx]
+    }
+  }
+
+  getPlatformName(item) {
+      var entity = 'mailbox.' + item.name
+      var stateObj = this.hass.states[entity.toLowerCase()];
+      return window.hassUtil.computeStateName(stateObj);
+  }
+
 }
 
 customElements.define('ha-panel-mailbox', HaPanelMailbox);
